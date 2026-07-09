@@ -1,0 +1,23 @@
+{
+  "name": "Зоны маршрута",
+  "short_name": "Зоны",
+  "description": "Считает километраж и стоимость поездки по зонам: Крым, Россия, новые территории",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0e1a14",
+  "theme_color": "#0e1a14",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "share_target": {
+    "action": "./index.html",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
+}

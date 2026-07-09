@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Редактор зон</title>
+<link rel="manifest" href="./manifest.webmanifest" />
+<meta name="theme-color" content="#0e1a14" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+<style>
+  :root {
+    --bg: #0e1a14; --bg-panel: #16261e; --border: #26382f;
+    --text: #eef2ee; --text-dim: #9fb0a6; --accent: #d97757;
+    --sans: 'Manrope','Segoe UI',system-ui,sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; background:var(--bg); color:var(--text); font-family:var(--sans); height:100%; }
+  body { display:flex; flex-direction:column; height:100vh; }
+
+  .topbar {
+    display:flex; align-items:center; gap:10px;
+    padding:12px 14px; border-bottom:1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .topbar a.back {
+    color: var(--text-dim); text-decoration:none; font-size:14px; padding:6px 10px;
+    border:1px solid var(--border); border-radius:8px;
+  }
+  select#zoneSelect {
+    background: var(--bg-panel); color: var(--text); border:1px solid var(--border);
+    border-radius:8px; padding:8px 10px; font-size:14px; font-family: var(--sans);
+  }
+  .spacer { flex:1; }
+  button {
+    font-family: var(--sans); font-size:13px; border-radius:8px; border:1px solid var(--border);
+    background: var(--bg-panel); color: var(--text); padding:8px 12px; cursor:pointer;
+  }
+  button.primary { background: var(--accent); color:#1a1108; border:none; font-weight:700; }
+  button.danger { color:#e08b7a; }
+
+  #map { flex:1; min-height:0; }
+
+  .hint {
+    padding:10px 14px; font-size:13px; color: var(--text-dim); border-top:1px solid var(--border);
+    line-height:1.5;
+  }
+  .hint b { color: var(--text); }
+
+  .toast {
+    position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
+    background: var(--bg-panel); border:1px solid var(--border); color:var(--text);
+    padding:10px 16px; border-radius:10px; font-size:13px; display:none; z-index:9999;
+  }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <a class="back" href="./index.html">← Назад</a>
+    <select id="zoneSelect">
+      <option value="crimea">Крым</option>
+      <option value="new_territories" selected>Новые территории</option>
+      <option value="russia">Россия</option>
+    </select>
+    <div class="spacer"></div>
+    <button id="startFromDefaultBtn">Начать от границы</button>
+    <button id="resetBtn" class="danger">Сбросить к стандартной</button>
+    <button id="saveBtn" class="primary">Сохранить</button>
+  </div>
+  <div id="map"></div>
+  <div class="hint">
+    Выберите зону вверху. <b>«Начать от границы»</b> подставит текущую (стандартную или уже сохранённую вами) границу — двигайте узлы, чтобы обрезать зону по нужным КПП. Можно рисовать несколько отдельных участков на одну зону. <b>«Сохранить»</b> — границы применятся только на этом устройстве, в общий расчёт они попадут сразу после сохранения.
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+  <script src="./boundaries.js"></script>
+  <script src="./zones.js"></script>
+</body>
+</html>
