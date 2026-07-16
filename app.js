@@ -64,16 +64,16 @@ function haversineKm(lon1, lat1, lon2, lat2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-/* ==== Разбивка готового маршрута по зонам ====
-   coords — массив точек геометрии маршрута в формате Яндекс.Карт: [lat, lon].
-   Между соседними точками геометрии расстояние маленькое (несколько метров —
-   десятки метров), поэтому дополнительный сэмплинг не нужен: сама геометрия
-   уже достаточно подробная, чтобы поймать момент пересечения границы зоны. */
-function computeZoneDistancesFromRoute(coords) {
+/* ==== Разбивка построенного маршрута по зонам ====
+   coords — точки геометрии маршрута от OSRM, формат GeoJSON: [lon, lat].
+   Точки геометрии расположены часто (метры-десятки метров), поэтому
+   дополнительный сэмплинг не нужен — сама геометрия достаточно подробная,
+   чтобы поймать момент пересечения границы зоны. */
+function computeZoneDistances(coords) {
   const totals = { crimea: 0, new_territories: 0, russia: 0, other: 0 };
   for (let i = 0; i < coords.length - 1; i++) {
-    const [lat1, lon1] = coords[i];
-    const [lat2, lon2] = coords[i + 1];
+    const [lon1, lat1] = coords[i];
+    const [lon2, lat2] = coords[i + 1];
     const segKm = haversineKm(lon1, lat1, lon2, lat2);
     if (segKm === 0) continue;
     const midLon = (lon1 + lon2) / 2;
@@ -99,7 +99,7 @@ const els = {
 };
 
 let lastTotals = null;
-let lastRouteCoords = null;
+let lastRouteCoords = null; // [[lon,lat], ...] геометрия маршрута от OSRM
 
 function currentTariffs() {
   return {
@@ -152,7 +152,7 @@ function renderResults(totals) {
 
 els.priceBtn.addEventListener('click', () => {
   if (!lastRouteCoords) return;
-  const totals = computeZoneDistancesFromRoute(lastRouteCoords);
+  const totals = computeZoneDistances(lastRouteCoords);
   els.status.textContent = '';
   els.status.className = 'status';
   renderResults(totals);
@@ -175,9 +175,11 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-/* ==== Яндекс.Карты: интерактивная карта + построение маршрута ==== */
+/* ==== Карта (Leaflet + OpenStreetMap), геокодер (Nominatim), маршрут (OSRM) ====
+   Всё три сервиса бесплатны и не требуют API-ключей. */
 let map = null;
-let multiRoute = null;
+let routeLayer = null;
+const markers = {}; // slot -> L.marker, slot: 'from' | 'to' | via-<index>
 let fromPoint = null; // [lat, lon]
 let toPoint = null; // [lat, lon]
 const viaPoints = []; // массив [lat, lon] | null, по одному на каждое доп. поле
@@ -187,32 +189,37 @@ function setStatus(text, kind) {
   els.status.className = kind ? `status ${kind}` : 'status';
 }
 
-// Ключ HTTP Геокодера (отдельный от ключа JavaScript API в index.html) —
-// используется для прямого запроса к geocode-maps.yandex.ru/v1/.
-const GEOCODER_API_KEY = '7c14fea8-931d-4547-970a-592350a94b02';
-
-// Превращает текстовый адрес в координаты [lat, lon] через HTTP Геокодер.
+// Превращает текстовый адрес в координаты [lat, lon] через Nominatim (OSM).
 async function geocodeAddress(address) {
   const url =
-    `https://geocode-maps.yandex.ru/v1/?apikey=${GEOCODER_API_KEY}` +
-    `&geocode=${encodeURIComponent(address)}&format=json&lang=ru_RU&results=1`;
+    `https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=ru` +
+    `&q=${encodeURIComponent(address)}`;
   const resp = await fetch(url);
-  if (!resp.ok) {
-    const body = await resp.text().catch(() => '');
-    throw new Error(`geocoder http ${resp.status}: ${body}`);
-  }
+  if (!resp.ok) throw new Error(`nominatim http ${resp.status}`);
   const data = await resp.json();
-  const members = data.response.GeoObjectCollection.featureMember;
-  if (!members.length) return null;
-  const pos = members[0].GeoObject.Point.pos; // строка "lon lat"
-  const [lon, lat] = pos.split(' ').map(Number);
-  return [lat, lon]; // в формате координат Яндекс.Карт JS API: [lat, lon]
+  if (!data.length) return null;
+  return [Number(data[0].lat), Number(data[0].lon)];
+}
+
+// Запрашивает у OSRM геометрию маршрута по дорогам между точками.
+// points — массив [lat, lon]. Возвращает координаты в формате GeoJSON [lon, lat].
+async function fetchRouteGeometry(points) {
+  const coords = points.map((p) => `${p[1]},${p[0]}`).join(';');
+  const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error('OSRM недоступен');
+  const data = await resp.json();
+  if (!data.routes || !data.routes.length) throw new Error('Маршрут не найден');
+  return data.routes[0].geometry.coordinates;
+}
+
+function setMarker(slot, coords) {
+  if (markers[slot]) map.removeLayer(markers[slot]);
+  markers[slot] = L.marker(coords).addTo(map);
 }
 
 // Привязывает геокодирование к полю ввода: адрес ищется по нажатию Enter
-// или при уходе с поля. (Автодополнение через ymaps.SuggestView больше не
-// доступно в бесплатном JS API — Suggest вынесен в отдельный платный продукт.)
-// onSelect получает координаты найденного адреса в формате [lat, lon].
+// или при уходе с поля.
 function bindAddressInput(inputEl, onSelect) {
   if (!inputEl) return;
   const runGeocode = () => {
@@ -229,8 +236,8 @@ function bindAddressInput(inputEl, onSelect) {
         onSelect(coords);
       })
       .catch((err) => {
-        console.error('Ошибка ymaps.geocode:', err);
-        setStatus('Ошибка геокодирования — проверьте API-ключ JavaScript API.', 'error');
+        console.error('Ошибка геокодирования:', err);
+        setStatus('Ошибка геокодирования — попробуйте ещё раз.', 'error');
       });
   };
   inputEl.addEventListener('keydown', (e) => {
@@ -260,6 +267,10 @@ function addViaInput() {
   removeBtn.textContent = '✕';
   removeBtn.addEventListener('click', () => {
     viaPoints[index] = null;
+    if (markers['via-' + index]) {
+      map.removeLayer(markers['via-' + index]);
+      delete markers['via-' + index];
+    }
     row.remove();
     rebuildRoute();
   });
@@ -270,6 +281,7 @@ function addViaInput() {
 
   bindAddressInput(input, (coords) => {
     viaPoints[index] = coords;
+    setMarker('via-' + index, coords);
     rebuildRoute();
   });
 }
@@ -279,47 +291,38 @@ function rebuildRoute() {
   lastRouteCoords = null;
 
   const points = [fromPoint, ...viaPoints, toPoint].filter(Boolean);
-  if (multiRoute) {
-    map.geoObjects.remove(multiRoute);
-    multiRoute = null;
+  if (routeLayer) {
+    map.removeLayer(routeLayer);
+    routeLayer = null;
   }
   if (points.length < 2) return;
 
   setStatus('Строим маршрут…', 'loading');
-  multiRoute = new ymaps.multiRouter.MultiRoute(
-    {
-      referencePoints: points,
-      params: { routingMode: 'auto' },
-    },
-    { boundsAutoApply: true }
-  );
-
-  multiRoute.model.events.add('requestsuccess', () => {
-    const active = multiRoute.getActiveRoute();
-    if (!active) {
-      setStatus('Маршрут не найден.', 'error');
-      return;
-    }
-    lastRouteCoords = active.geometry.getCoordinates();
-    setStatus('', null);
-    els.priceBtn.classList.remove('hidden');
-  });
-  multiRoute.model.events.add('requestfail', (e) => {
-    console.error('Ошибка MultiRoute (requestfail):', e.get('error'));
-    setStatus('Не удалось построить маршрут.', 'error');
-  });
-
-  map.geoObjects.add(multiRoute);
+  fetchRouteGeometry(points)
+    .then((coords) => {
+      lastRouteCoords = coords; // [[lon,lat], ...]
+      const latLngs = coords.map(([lon, lat]) => [lat, lon]);
+      routeLayer = L.polyline(latLngs, { color: '#d97757', weight: 4, opacity: 0.85 }).addTo(map);
+      map.fitBounds(routeLayer.getBounds(), { padding: [30, 30] });
+      setStatus('', null);
+      els.priceBtn.classList.remove('hidden');
+    })
+    .catch((err) => {
+      console.error('Ошибка построения маршрута:', err);
+      setStatus('Не удалось построить маршрут: ' + err.message, 'error');
+    });
 }
 
-function handleMapClick(coords) {
+function handleMapClick(latlng) {
   // Клик по карте задаёт первую незаполненную точку — «Откуда», затем «Куда».
-  // Для промежуточных точек используйте адресные поля с кнопкой «+».
+  const coords = [latlng.lat, latlng.lng];
   if (!fromPoint) {
     fromPoint = coords;
+    setMarker('from', coords);
     setStatus('Точка «Откуда» поставлена кликом по карте.', null);
   } else if (!toPoint) {
     toPoint = coords;
+    setMarker('to', coords);
     setStatus('Точка «Куда» поставлена кликом по карте.', null);
   } else {
     return;
@@ -328,20 +331,22 @@ function handleMapClick(coords) {
 }
 
 function initMapApp() {
-  map = new ymaps.Map('map', {
-    center: [45.3, 37.5], // примерно между южной Россией и Крымом
-    zoom: 6,
-    controls: ['zoomControl', 'geolocationControl'],
-  });
+  map = L.map('map').setView([45.3, 37.5], 6); // примерно между южной Россией и Крымом
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors',
+    maxZoom: 19,
+  }).addTo(map);
 
-  map.events.add('click', (e) => handleMapClick(e.get('coords')));
+  map.on('click', (e) => handleMapClick(e.latlng));
 
   bindAddressInput(els.fromInput, (coords) => {
     fromPoint = coords;
+    setMarker('from', coords);
     rebuildRoute();
   });
   bindAddressInput(els.toInput, (coords) => {
     toPoint = coords;
+    setMarker('to', coords);
     rebuildRoute();
   });
 
@@ -350,8 +355,4 @@ function initMapApp() {
   }
 }
 
-if (window.ymaps) {
-  ymaps.ready(initMapApp);
-} else {
-  setStatus('Не удалось загрузить Яндекс.Карты — проверьте API-ключ и подключение.', 'error');
-}
+initMapApp();
