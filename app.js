@@ -304,7 +304,8 @@ function rebuildRoute() {
     setStatus('', null);
     els.priceBtn.classList.remove('hidden');
   });
-  multiRoute.model.events.add('requestfail', () => {
+  multiRoute.model.events.add('requestfail', (e) => {
+    console.error('Ошибка MultiRoute (requestfail):', e.get('error'));
     setStatus('Не удалось построить маршрут.', 'error');
   });
 
