@@ -7,6 +7,7 @@
 <link rel="manifest" href="./manifest.webmanifest" />
 <meta name="theme-color" content="#0e1a14" />
 <link rel="apple-touch-icon" href="./icon.png" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <style>
 :root {
   --bg: #0e1a14;
@@ -164,6 +165,7 @@ button.primary:active { transform: translateY(1px); }
   margin-top: 14px;
   overflow: hidden;
   border: 1px solid var(--border);
+  background: #1a2b22;
 }
 
 /* Всплывающая кнопка расчёта — появляется, когда маршрут построен */
@@ -174,7 +176,7 @@ button.primary:active { transform: translateY(1px); }
   bottom: 22px;
   max-width: 444px;
   margin: 0 auto;
-  z-index: 50;
+  z-index: 500;
   box-shadow: 0 8px 24px rgba(0,0,0,0.35);
 }
 .floating-btn.hidden { display: none; }
@@ -188,7 +190,7 @@ footer a { color: var(--text-dim); }
 <header>
 <p class="eyebrow">Крым · Россия · Новые территории</p>
 <h1>Зоны маршрута</h1>
-<p class="sub">Укажите точки маршрута адресом или кликом по карте — маршрут строится реальным маршрутизатором Яндекс.Карт прямо здесь, без перехода в другое приложение.</p>
+<p class="sub">Впишите «Откуда» и «Куда» — маршрут построится по настоящим дорогам автоматически, ничего больше указывать не нужно.</p>
 </header>
 
 <div class="panel">
@@ -235,7 +237,7 @@ footer a { color: var(--text-dim); }
 </div>
 
 <footer>
-Маршрут строит Яндекс.Карты (реальные дороги, с учётом разворотов и мостов) — приложение обращается к нему напрямую, без сторонних сервисов маршрутизации.<br/>
+Карта — OpenStreetMap, поиск адреса — Nominatim, построение маршрута по дорогам — OSRM. Все три сервиса бесплатны и не требуют ключей.<br/>
 Зоны определяются по административным границам, упрощённым для расчёта.
 </footer>
 </div>
@@ -243,8 +245,8 @@ footer a { color: var(--text-dim); }
 <button type="button" class="primary floating-btn hidden" id="priceBtn">Рассчитать цену</button>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="./boundaries.js"></script>
-<script src="https://api-maps.yandex.ru/2.1/?apikey=bc9dbfd8-bd69-42e1-a54c-47707fa651b5&lang=ru_RU" type="text/javascript"></script>
 <script src="./app.js"></script>
 </body>
 </html>
