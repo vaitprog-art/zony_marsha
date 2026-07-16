@@ -206,14 +206,15 @@ async function geocodeAddress(address) {
   return [lat, lon]; // в формате координат Яндекс.Карт JS API: [lat, lon]
 }
 
-// Привязывает подсказки адресов (SuggestView, часть JS API) и геокодирование
-// (отдельный ключ GEOCODER_API_KEY) к полю ввода.
-// onSelect получает координаты выбранного адреса в формате [lat, lon].
+// Привязывает геокодирование к полю ввода: адрес ищется по нажатию Enter
+// или при уходе с поля. (Автодополнение через ymaps.SuggestView больше не
+// доступно в бесплатном JS API — Suggest вынесен в отдельный платный продукт.)
+// onSelect получает координаты найденного адреса в формате [lat, lon].
 function bindAddressInput(inputEl, onSelect) {
   if (!inputEl) return;
-  const suggestView = new ymaps.SuggestView(inputEl);
-  suggestView.events.add('select', (e) => {
-    const value = e.get('item').value;
+  const runGeocode = () => {
+    const value = inputEl.value.trim();
+    if (!value) return;
     setStatus('Ищем адрес…', 'loading');
     geocodeAddress(value)
       .then((coords) => {
@@ -225,7 +226,14 @@ function bindAddressInput(inputEl, onSelect) {
         onSelect(coords);
       })
       .catch(() => setStatus('Ошибка геокодирования — проверьте API-ключ Геокодера.', 'error'));
+  };
+  inputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      runGeocode();
+    }
   });
+  inputEl.addEventListener('blur', runGeocode);
 }
 
 function addViaInput() {
@@ -238,7 +246,7 @@ function addViaInput() {
 
   const input = document.createElement('input');
   input.type = 'text';
-  input.placeholder = 'Промежуточная точка — адрес или название';
+  input.placeholder = 'Промежуточная точка — адрес, затем Enter';
 
   const removeBtn = document.createElement('button');
   removeBtn.type = 'button';
