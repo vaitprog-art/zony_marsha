@@ -216,7 +216,10 @@ function bindAddressInput(inputEl, onSelect) {
         setStatus('', null);
         onSelect(coords);
       })
-      .catch(() => setStatus('Ошибка геокодирования — проверьте API-ключ JavaScript API.', 'error'));
+      .catch((err) => {
+        console.error('Ошибка ymaps.geocode:', err);
+        setStatus('Ошибка геокодирования — проверьте API-ключ JavaScript API.', 'error');
+      });
   };
   inputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
