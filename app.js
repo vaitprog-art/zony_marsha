@@ -194,7 +194,7 @@ const GEOCODER_API_KEY = '7c14fea8-931d-4547-970a-592350a94b02';
 // Превращает текстовый адрес в координаты [lat, lon] через HTTP Геокодер.
 async function geocodeAddress(address) {
   const url =
-    `https://geocode-maps.yandex.ru/1.x/?apikey=${GEOCODER_API_KEY}` +
+    `https://geocode-maps.yandex.ru/v1/?apikey=${GEOCODER_API_KEY}` +
     `&geocode=${encodeURIComponent(address)}&format=json&lang=ru_RU&results=1`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error('geocoder http error');
