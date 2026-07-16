@@ -187,14 +187,26 @@ function setStatus(text, kind) {
   els.status.className = kind ? `status ${kind}` : 'status';
 }
 
-// Превращает текстовый адрес в координаты [lat, lon] через клиентский
-// ymaps.geocode() — использует тот же ключ JS API, что и карта (он уже
-// подтверждённо рабочий), без отдельного ключа HTTP Геокодера.
+// Ключ HTTP Геокодера (отдельный от ключа JavaScript API в index.html) —
+// используется для прямого запроса к geocode-maps.yandex.ru/v1/.
+const GEOCODER_API_KEY = '7c14fea8-931d-4547-970a-592350a94b02';
+
+// Превращает текстовый адрес в координаты [lat, lon] через HTTP Геокодер.
 async function geocodeAddress(address) {
-  const res = await ymaps.geocode(address, { results: 1 });
-  const geoObject = res.geoObjects.get(0);
-  if (!geoObject) return null;
-  return geoObject.geometry.getCoordinates(); // уже в формате [lat, lon]
+  const url =
+    `https://geocode-maps.yandex.ru/v1/?apikey=${GEOCODER_API_KEY}` +
+    `&geocode=${encodeURIComponent(address)}&format=json&lang=ru_RU&results=1`;
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    throw new Error(`geocoder http ${resp.status}: ${body}`);
+  }
+  const data = await resp.json();
+  const members = data.response.GeoObjectCollection.featureMember;
+  if (!members.length) return null;
+  const pos = members[0].GeoObject.Point.pos; // строка "lon lat"
+  const [lon, lat] = pos.split(' ').map(Number);
+  return [lat, lon]; // в формате координат Яндекс.Карт JS API: [lat, lon]
 }
 
 // Привязывает геокодирование к полю ввода: адрес ищется по нажатию Enter
