@@ -64,59 +64,18 @@ function haversineKm(lon1, lat1, lon2, lat2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-/* ==== Разбор ссылки Яндекс.Карт ==== */
-function extractYandexUrl(rawText) {
-  if (!rawText) return null;
-  const match = rawText.match(/https?:\/\/[^\s"'<>]+/);
-  return match ? match[0] : null;
-}
-
-// Поддерживает rtext=lat,lon~lat,lon~... (основной формат ссылки на маршрут)
-function parseWaypoints(url) {
-  let u;
-  try {
-    u = new URL(url);
-  } catch (e) {
-    return { error: 'Не удалось распознать ссылку.' };
-  }
-  const rtext = u.searchParams.get('rtext');
-  if (!rtext) {
-    return {
-      error:
-        'В ссылке нет параметра маршрута (rtext). Похоже, это короткая ссылка или ссылка на точку, а не на маршрут. Откройте её в браузере, постройте маршрут и скопируйте адрес из строки браузера — там появится rtext=...',
-    };
-  }
-  const points = rtext.split('~').map((pair) => {
-    const [lat, lon] = pair.split(',').map(Number);
-    return { lat, lon };
-  });
-  if (points.some((p) => Number.isNaN(p.lat) || Number.isNaN(p.lon))) {
-    return { error: 'Не удалось распознать координаты в ссылке.' };
-  }
-  if (points.length < 2) {
-    return { error: 'В ссылке меньше двух точек — нечего строить.' };
-  }
-  return { points };
-}
-
-/* ==== Запрос маршрута к OSRM (реальные дороги, не по прямой) ==== */
-async function fetchRouteGeometry(points) {
-  const coords = points.map((p) => `${p.lon},${p.lat}`).join(';');
-  const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error('Сервис построения маршрута недоступен');
-  const data = await resp.json();
-  if (!data.routes || !data.routes.length) throw new Error('Маршрут не найден');
-  return data.routes[0].geometry.coordinates; // [ [lon,lat], ... ]
-}
-
-/* ==== Основной расчёт: км по зонам ==== */
-function computeZoneDistances(coords) {
+/* ==== Разбивка готового маршрута по зонам ====
+   coords — массив точек геометрии маршрута в формате Яндекс.Карт: [lat, lon].
+   Между соседними точками геометрии расстояние маленькое (несколько метров —
+   десятки метров), поэтому дополнительный сэмплинг не нужен: сама геометрия
+   уже достаточно подробная, чтобы поймать момент пересечения границы зоны. */
+function computeZoneDistancesFromRoute(coords) {
   const totals = { crimea: 0, new_territories: 0, russia: 0, other: 0 };
   for (let i = 0; i < coords.length - 1; i++) {
-    const [lon1, lat1] = coords[i];
-    const [lon2, lat2] = coords[i + 1];
+    const [lat1, lon1] = coords[i];
+    const [lat2, lon2] = coords[i + 1];
     const segKm = haversineKm(lon1, lat1, lon2, lat2);
+    if (segKm === 0) continue;
     const midLon = (lon1 + lon2) / 2;
     const midLat = (lat1 + lat2) / 2;
     const zone = classifyPoint(midLon, midLat);
@@ -125,18 +84,22 @@ function computeZoneDistances(coords) {
   return totals;
 }
 
-/* ==== UI ==== */
+/* ==== UI: тарифы и результат ==== */
 const els = {
-  input: document.getElementById('linkInput'),
-  calcBtn: document.getElementById('calcBtn'),
   status: document.getElementById('status'),
   results: document.getElementById('results'),
   tariffCrimea: document.getElementById('tariffCrimea'),
   tariffNew: document.getElementById('tariffNew'),
   tariffRussia: document.getElementById('tariffRussia'),
+  fromInput: document.getElementById('fromInput'),
+  toInput: document.getElementById('toInput'),
+  viaList: document.getElementById('viaList'),
+  addViaBtn: document.getElementById('addViaBtn'),
+  priceBtn: document.getElementById('priceBtn'),
 };
 
 let lastTotals = null;
+let lastRouteCoords = null;
 
 function currentTariffs() {
   return {
@@ -187,47 +150,13 @@ function renderResults(totals) {
   });
 });
 
-async function handleCalculate() {
-  const raw = els.input.value.trim();
-  const url = extractYandexUrl(raw);
-  if (!url) {
-    els.status.textContent = 'Вставьте ссылку на маршрут из Яндекс.Карт.';
-    els.status.className = 'status error';
-    return;
-  }
-  const parsed = parseWaypoints(url);
-  if (parsed.error) {
-    els.status.textContent = parsed.error;
-    els.status.className = 'status error';
-    els.results.classList.add('hidden');
-    return;
-  }
-  els.status.textContent = 'Строим маршрут и определяем зоны…';
-  els.status.className = 'status loading';
-  els.results.classList.add('hidden');
-  try {
-    const coords = await fetchRouteGeometry(parsed.points);
-    const totals = computeZoneDistances(coords);
-    els.status.textContent = '';
-    els.status.className = 'status';
-    renderResults(totals);
-  } catch (e) {
-    els.status.textContent = 'Ошибка при построении маршрута: ' + e.message;
-    els.status.className = 'status error';
-  }
-}
-
-els.calcBtn.addEventListener('click', handleCalculate);
-
-/* ==== Приём ссылки из "Поделиться" (share target) ==== */
-(function initFromShare() {
-  const params = new URLSearchParams(window.location.search);
-  const shared = params.get('url') || params.get('text') || params.get('title');
-  if (shared) {
-    els.input.value = shared;
-    handleCalculate();
-  }
-})();
+els.priceBtn.addEventListener('click', () => {
+  if (!lastRouteCoords) return;
+  const totals = computeZoneDistancesFromRoute(lastRouteCoords);
+  els.status.textContent = '';
+  els.status.className = 'status';
+  renderResults(totals);
+});
 
 /* ==== Индикатор пользовательских границ ==== */
 (function showCustomZonesNote() {
@@ -244,4 +173,170 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   });
+}
+
+/* ==== Яндекс.Карты: интерактивная карта + построение маршрута ==== */
+let map = null;
+let multiRoute = null;
+let fromPoint = null; // [lat, lon]
+let toPoint = null; // [lat, lon]
+const viaPoints = []; // массив [lat, lon] | null, по одному на каждое доп. поле
+
+function setStatus(text, kind) {
+  els.status.textContent = text || '';
+  els.status.className = kind ? `status ${kind}` : 'status';
+}
+
+// Ключ HTTP Геокодера (отдельный от ключа JavaScript API в index.html) —
+// используется для прямого запроса к geocode-maps.yandex.ru.
+const GEOCODER_API_KEY = '7c14fea8-931d-4547-970a-592350a94b02';
+
+// Превращает текстовый адрес в координаты [lat, lon] через HTTP Геокодер.
+async function geocodeAddress(address) {
+  const url =
+    `https://geocode-maps.yandex.ru/1.x/?apikey=${GEOCODER_API_KEY}` +
+    `&geocode=${encodeURIComponent(address)}&format=json&lang=ru_RU&results=1`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error('geocoder http error');
+  const data = await resp.json();
+  const members = data.response.GeoObjectCollection.featureMember;
+  if (!members.length) return null;
+  const pos = members[0].GeoObject.Point.pos; // строка "lon lat"
+  const [lon, lat] = pos.split(' ').map(Number);
+  return [lat, lon]; // в формате координат Яндекс.Карт JS API: [lat, lon]
+}
+
+// Привязывает подсказки адресов (SuggestView, часть JS API) и геокодирование
+// (отдельный ключ GEOCODER_API_KEY) к полю ввода.
+// onSelect получает координаты выбранного адреса в формате [lat, lon].
+function bindAddressInput(inputEl, onSelect) {
+  if (!inputEl) return;
+  const suggestView = new ymaps.SuggestView(inputEl);
+  suggestView.events.add('select', (e) => {
+    const value = e.get('item').value;
+    setStatus('Ищем адрес…', 'loading');
+    geocodeAddress(value)
+      .then((coords) => {
+        if (!coords) {
+          setStatus('Не удалось найти этот адрес.', 'error');
+          return;
+        }
+        setStatus('', null);
+        onSelect(coords);
+      })
+      .catch(() => setStatus('Ошибка геокодирования — проверьте API-ключ Геокодера.', 'error'));
+  });
+}
+
+function addViaInput() {
+  if (!els.viaList) return;
+  const index = viaPoints.length;
+  viaPoints.push(null);
+
+  const row = document.createElement('div');
+  row.className = 'via-row';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Промежуточная точка — адрес или название';
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'via-remove';
+  removeBtn.textContent = '✕';
+  removeBtn.addEventListener('click', () => {
+    viaPoints[index] = null;
+    row.remove();
+    rebuildRoute();
+  });
+
+  row.appendChild(input);
+  row.appendChild(removeBtn);
+  els.viaList.appendChild(row);
+
+  bindAddressInput(input, (coords) => {
+    viaPoints[index] = coords;
+    rebuildRoute();
+  });
+}
+
+function rebuildRoute() {
+  els.priceBtn.classList.add('hidden');
+  lastRouteCoords = null;
+
+  const points = [fromPoint, ...viaPoints, toPoint].filter(Boolean);
+  if (multiRoute) {
+    map.geoObjects.remove(multiRoute);
+    multiRoute = null;
+  }
+  if (points.length < 2) return;
+
+  setStatus('Строим маршрут…', 'loading');
+  multiRoute = new ymaps.multiRouter.MultiRoute(
+    {
+      referencePoints: points,
+      params: { routingMode: 'auto' },
+    },
+    { boundsAutoApply: true }
+  );
+
+  multiRoute.model.events.add('requestsuccess', () => {
+    const active = multiRoute.getActiveRoute();
+    if (!active) {
+      setStatus('Маршрут не найден.', 'error');
+      return;
+    }
+    lastRouteCoords = active.geometry.getCoordinates();
+    setStatus('', null);
+    els.priceBtn.classList.remove('hidden');
+  });
+  multiRoute.model.events.add('requestfail', () => {
+    setStatus('Не удалось построить маршрут.', 'error');
+  });
+
+  map.geoObjects.add(multiRoute);
+}
+
+function handleMapClick(coords) {
+  // Клик по карте задаёт первую незаполненную точку — «Откуда», затем «Куда».
+  // Для промежуточных точек используйте адресные поля с кнопкой «+».
+  if (!fromPoint) {
+    fromPoint = coords;
+    setStatus('Точка «Откуда» поставлена кликом по карте.', null);
+  } else if (!toPoint) {
+    toPoint = coords;
+    setStatus('Точка «Куда» поставлена кликом по карте.', null);
+  } else {
+    return;
+  }
+  rebuildRoute();
+}
+
+function initMapApp() {
+  map = new ymaps.Map('map', {
+    center: [45.3, 37.5], // примерно между южной Россией и Крымом
+    zoom: 6,
+    controls: ['zoomControl', 'geolocationControl'],
+  });
+
+  map.events.add('click', (e) => handleMapClick(e.get('coords')));
+
+  bindAddressInput(els.fromInput, (coords) => {
+    fromPoint = coords;
+    rebuildRoute();
+  });
+  bindAddressInput(els.toInput, (coords) => {
+    toPoint = coords;
+    rebuildRoute();
+  });
+
+  if (els.addViaBtn) {
+    els.addViaBtn.addEventListener('click', addViaInput);
+  }
+}
+
+if (window.ymaps) {
+  ymaps.ready(initMapApp);
+} else {
+  setStatus('Не удалось загрузить Яндекс.Карты — проверьте API-ключ и подключение.', 'error');
 }
