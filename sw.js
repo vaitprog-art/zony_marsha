@@ -1,4 +1,4 @@
-const CACHE = 'zony-marshruta-v1';
+const CACHE = 'zony-marshruta-v2';
 const ASSETS = [
   './index.html',
   './app.js',
@@ -24,13 +24,26 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  // Роутинг (OSRM) всегда идёт в сеть, статику отдаём из кэша с фоновым обновлением
-  if (e.request.method !== 'GET' || e.request.url.includes('router.project-osrm.org')) return;
+  const url = new URL(e.request.url);
+
+  // Кэшируем только собственную статику (тот же источник, тот же домен).
+  // Запросы к внешним сервисам — Яндекс.Карты, HTTP Геокодер, Turf.js CDN —
+  // всегда идут напрямую в сеть, без перехвата и кэширования.
+  if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
+
   e.respondWith(
     caches.match(e.request).then((cached) => {
       const network = fetch(e.request)
         .then((resp) => {
-          caches.open(CACHE).then((c) => c.put(e.request, resp.clone()));
+          // Клонируем СРАЗУ и синхронно — до того как resp уйдёт браузеру
+          // как основной ответ (return resp ниже) и его тело станет
+          // "использованным". Раньше clone() вызывался асинхронно внутри
+          // caches.open().then(...), уже после этого момента — отсюда была
+          // ошибка "Response body is already used".
+          if (resp.ok) {
+            const respClone = resp.clone();
+            caches.open(CACHE).then((c) => c.put(e.request, respClone));
+          }
           return resp;
         })
         .catch(() => cached);
