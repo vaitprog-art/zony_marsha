@@ -173,13 +173,17 @@ button.primary:active { transform: translateY(1px); }
   position: fixed;
   left: 18px;
   right: 18px;
-  bottom: 22px;
+  bottom: max(22px, env(safe-area-inset-bottom));
   max-width: 444px;
   margin: 0 auto;
   z-index: 500;
   box-shadow: 0 8px 24px rgba(0,0,0,0.35);
 }
 .floating-btn.hidden { display: none; }
+/* button.primary задаёт width:100% с более высокой специфичностью —
+   явно перебиваем через id, иначе кнопка растягивается на всю ширину
+   viewport и вылезает за правый край экрана на мобильных. */
+#priceBtn.floating-btn { width: auto; }
 
 footer { text-align: center; color: var(--text-dim); font-size: 12px; margin-top: 26px; line-height: 1.6; }
 footer a { color: var(--text-dim); }
