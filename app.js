@@ -150,6 +150,13 @@ function renderResults(totals) {
   });
 });
 
+// На мобильных тап по кнопке после ввода адреса сначала вызывает blur у
+// поля ввода (это пересобирает маршрут и на миг прячет кнопку) — из-за
+// этого сам тап по кнопке проваливается. preventDefault на touchstart/
+// mousedown не даёт полю потерять фокus раньше, чем сработает клик.
+els.priceBtn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+els.priceBtn.addEventListener('mousedown', (e) => e.preventDefault());
+
 els.priceBtn.addEventListener('click', () => {
   if (!lastRouteCoords) return;
   const totals = computeZoneDistances(lastRouteCoords);
