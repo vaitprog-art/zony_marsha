@@ -125,7 +125,6 @@ const els = {
   toInput: document.getElementById('toInput'),
   viaList: document.getElementById('viaList'),
   addViaBtn: document.getElementById('addViaBtn'),
-  priceBtn: document.getElementById('priceBtn'),
 };
 
 let lastTotals = null;
@@ -181,19 +180,17 @@ function renderResults(totals) {
 });
 
 // На мобильных тап по кнопке после ввода адреса сначала вызывает blur у
-// поля ввода (это пересобирает маршрут и на миг прячет кнопку) — из-за
-// этого сам тап по кнопке проваливается. preventDefault на touchstart/
-// mousedown не даёт полю потерять фокus раньше, чем сработает клик.
-els.priceBtn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
-els.priceBtn.addEventListener('mousedown', (e) => e.preventDefault());
-
-els.priceBtn.addEventListener('click', async () => {
+// поля ввода — это пересобирает маршрут. runAutoCalculate вызывается прямо
+// из rebuildRoute после успешного построения маршрута, так что отдельный
+// тап по кнопке для расчёта больше не нужен.
+async function runAutoCalculate() {
   if (!lastRouteCoords) return;
   setStatus('Считаем…', 'loading');
   const totals = await computeZoneDistances(lastRouteCoords);
   setStatus('', null);
   renderResults(totals);
-});
+  els.results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 
 /* ==== Индикатор пользовательских границ ==== */
 (function showCustomZonesNote() {
@@ -262,9 +259,11 @@ function setMarker(slot, coords) {
 // или при уходе с поля.
 function bindAddressInput(inputEl, onSelect) {
   if (!inputEl) return;
+  let lastRequestedValue = null;
   const runGeocode = () => {
     const value = inputEl.value.trim();
-    if (!value) return;
+    if (!value || value === lastRequestedValue) return;
+    lastRequestedValue = value;
     setStatus('Ищем адрес…', 'loading');
     geocodeAddress(value)
       .then((coords) => {
@@ -284,7 +283,11 @@ function bindAddressInput(inputEl, onSelect) {
     if (e.key === 'Enter') {
       e.preventDefault();
       runGeocode();
+      inputEl.blur(); // закрываем клавиатуру на мобильных сразу после Enter
     }
+  });
+  inputEl.addEventListener('input', () => {
+    lastRequestedValue = null; // изменили текст — следующий Enter/blur снова ищет
   });
   inputEl.addEventListener('blur', runGeocode);
 }
@@ -327,8 +330,8 @@ function addViaInput() {
 }
 
 function rebuildRoute() {
-  els.priceBtn.classList.add('hidden');
   lastRouteCoords = null;
+  els.results.classList.add('hidden');
 
   const points = [fromPoint, ...viaPoints, toPoint].filter(Boolean);
   if (routeLayer) {
@@ -344,8 +347,7 @@ function rebuildRoute() {
       const latLngs = coords.map(([lon, lat]) => [lat, lon]);
       routeLayer = L.polyline(latLngs, { color: '#d97757', weight: 4, opacity: 0.85 }).addTo(map);
       map.fitBounds(routeLayer.getBounds(), { padding: [30, 30] });
-      setStatus('', null);
-      els.priceBtn.classList.remove('hidden');
+      return runAutoCalculate();
     })
     .catch((err) => {
       console.error('Ошибка построения маршрута:', err);
