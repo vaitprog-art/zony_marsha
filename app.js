@@ -14,6 +14,37 @@ function toPolygonFeature(geometry) {
   return { type: 'Feature', properties: {}, geometry };
 }
 
+// Упрощает полигон (Douglas-Peucker) и считает его bounding box один раз при
+// загрузке — это резко ускоряет classifyPoint на слабых устройствах:
+// исходные границы содержат тысячи точек (например, Крым — 1175, Херсонская
+// область — 1136), хотя для классификации точки маршрута такая точность не
+// нужна. tolerance ~0.005° (≈500 м) — граница смещается на десятки-сотни
+// метров, что не влияет на расчёт км по зонам на масштабе целого маршрута.
+const ZONE_SIMPLIFY_TOLERANCE = 0.005;
+
+function prepareZonePolygons(features) {
+  return features.map((f) => {
+    let feature = f;
+    try {
+      feature = turf.simplify(f, { tolerance: ZONE_SIMPLIFY_TOLERANCE, highQuality: false });
+    } catch (e) {
+      /* если упростить не удалось — используем исходный полигон */
+    }
+    return { feature, bbox: turf.bbox(feature) };
+  });
+}
+
+// Быстрая проверка «точка рядом с этой зоной вообще?» по bounding box —
+// на порядки дешевле полного point-in-polygon, отсеивает подавляющее
+// большинство точек маршрута, которые заведомо далеко от зоны.
+function pointInZonePolys(lon, lat, polys) {
+  for (const { feature, bbox } of polys) {
+    if (lon < bbox[0] || lon > bbox[2] || lat < bbox[1] || lat > bbox[3]) continue;
+    if (turf.booleanPointInPolygon([lon, lat], feature)) return true;
+  }
+  return false;
+}
+
 // Если пользователь перерисовал зону в редакторе (zones.html), берём его версию,
 // иначе — встроенную границу по умолчанию.
 function loadZonePolygons(zoneKey, defaultGeometries) {
@@ -21,12 +52,12 @@ function loadZonePolygons(zoneKey, defaultGeometries) {
   if (raw) {
     try {
       const fc = JSON.parse(raw);
-      if (fc.features && fc.features.length) return fc.features;
+      if (fc.features && fc.features.length) return prepareZonePolygons(fc.features);
     } catch (e) {
       /* игнорируем повреждённые данные, используем дефолт */
     }
   }
-  return defaultGeometries.map(toPolygonFeature);
+  return prepareZonePolygons(defaultGeometries.map(toPolygonFeature));
 }
 
 const CRIMEA_POLYS = loadZonePolygons('crimea', [ZONE_BOUNDARIES.crimea]);
@@ -41,16 +72,9 @@ const usingCustomZones = ['crimea', 'new_territories', 'russia'].filter((k) =>
 );
 
 function classifyPoint(lon, lat) {
-  const pt = turf.point([lon, lat]);
-  for (const poly of CRIMEA_POLYS) {
-    if (turf.booleanPointInPolygon(pt, poly)) return 'crimea';
-  }
-  for (const poly of NEW_TERR_POLYS) {
-    if (turf.booleanPointInPolygon(pt, poly)) return 'new_territories';
-  }
-  for (const poly of RUSSIA_POLYS) {
-    if (turf.booleanPointInPolygon(pt, poly)) return 'russia';
-  }
+  if (pointInZonePolys(lon, lat, CRIMEA_POLYS)) return 'crimea';
+  if (pointInZonePolys(lon, lat, NEW_TERR_POLYS)) return 'new_territories';
+  if (pointInZonePolys(lon, lat, RUSSIA_POLYS)) return 'russia';
   return 'other';
 }
 
@@ -64,22 +88,28 @@ function haversineKm(lon1, lat1, lon2, lat2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+function sleep0() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 /* ==== Разбивка построенного маршрута по зонам ====
    coords — точки геометрии маршрута от OSRM, формат GeoJSON: [lon, lat].
-   Точки геометрии расположены часто (метры-десятки метров), поэтому
-   дополнительный сэмплинг не нужен — сама геометрия достаточно подробная,
-   чтобы поймать момент пересечения границы зоны. */
-function computeZoneDistances(coords) {
+   Считаем частями (CHUNK точек за раз) с паузой между частями — на слабых
+   устройствах это не даёт браузеру «зависнуть» на весь расчёт целиком. */
+const ZONE_CALC_CHUNK = 300;
+
+async function computeZoneDistances(coords) {
   const totals = { crimea: 0, new_territories: 0, russia: 0, other: 0 };
   for (let i = 0; i < coords.length - 1; i++) {
     const [lon1, lat1] = coords[i];
     const [lon2, lat2] = coords[i + 1];
     const segKm = haversineKm(lon1, lat1, lon2, lat2);
-    if (segKm === 0) continue;
-    const midLon = (lon1 + lon2) / 2;
-    const midLat = (lat1 + lat2) / 2;
-    const zone = classifyPoint(midLon, midLat);
-    totals[zone] += segKm;
+    if (segKm > 0) {
+      const midLon = (lon1 + lon2) / 2;
+      const midLat = (lat1 + lat2) / 2;
+      totals[classifyPoint(midLon, midLat)] += segKm;
+    }
+    if (i % ZONE_CALC_CHUNK === 0) await sleep0();
   }
   return totals;
 }
@@ -157,11 +187,11 @@ function renderResults(totals) {
 els.priceBtn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
 els.priceBtn.addEventListener('mousedown', (e) => e.preventDefault());
 
-els.priceBtn.addEventListener('click', () => {
+els.priceBtn.addEventListener('click', async () => {
   if (!lastRouteCoords) return;
-  const totals = computeZoneDistances(lastRouteCoords);
-  els.status.textContent = '';
-  els.status.className = 'status';
+  setStatus('Считаем…', 'loading');
+  const totals = await computeZoneDistances(lastRouteCoords);
+  setStatus('', null);
   renderResults(totals);
 });
 
@@ -212,7 +242,10 @@ async function geocodeAddress(address) {
 // points — массив [lat, lon]. Возвращает координаты в формате GeoJSON [lon, lat].
 async function fetchRouteGeometry(points) {
   const coords = points.map((p) => `${p[1]},${p[0]}`).join(';');
-  const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
+  // overview=simplified — geometry заметно компактнее full (по некоторым
+  // маршрутам в разы меньше точек), для расчёта км по зонам этого достаточно,
+  // а нагрузка на слабых устройствах ощутимо ниже.
+  const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=simplified&geometries=geojson`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error('OSRM недоступен');
   const data = await resp.json();
