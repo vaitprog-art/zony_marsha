@@ -168,22 +168,6 @@ button.primary:active { transform: translateY(1px); }
   background: #1a2b22;
 }
 
-/* Всплывающая кнопка расчёта — появляется, когда маршрут построен */
-.floating-btn {
-  position: fixed;
-  left: 18px;
-  right: 18px;
-  bottom: max(22px, env(safe-area-inset-bottom));
-  max-width: 444px;
-  margin: 0 auto;
-  z-index: 500;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-}
-.floating-btn.hidden { display: none; }
-/* button.primary задаёт width:100% с более высокой специфичностью —
-   явно перебиваем через id, иначе кнопка растягивается на всю ширину
-   viewport и вылезает за правый край экрана на мобильных. */
-#priceBtn.floating-btn { width: auto; }
 
 footer { text-align: center; color: var(--text-dim); font-size: 12px; margin-top: 26px; line-height: 1.6; }
 footer a { color: var(--text-dim); }
@@ -194,7 +178,7 @@ footer a { color: var(--text-dim); }
 <header>
 <p class="eyebrow">Крым · Россия · Новые территории</p>
 <h1>Зоны маршрута</h1>
-<p class="sub">Впишите «Откуда» и «Куда» — маршрут построится по настоящим дорогам автоматически, ничего больше указывать не нужно.</p>
+<p class="sub">Впишите «Откуда», нажмите Enter, впишите «Куда», нажмите Enter — цена посчитается сама, ничего нажимать дополнительно не нужно.</p>
 </header>
 
 <div class="panel">
@@ -209,6 +193,11 @@ footer a { color: var(--text-dim); }
 <button type="button" class="secondary-btn" id="addViaBtn">+ Добавить промежуточную точку</button>
 <div id="map"></div>
 <div class="status" id="status"></div>
+</div>
+
+<div class="panel" id="resultsPanel">
+<h2>Результат</h2>
+<div id="results" class="hidden"></div>
 </div>
 
 <div class="panel">
@@ -229,11 +218,6 @@ footer a { color: var(--text-dim); }
 </div>
 </div>
 
-<div class="panel" id="resultsPanel">
-<h2>Результат</h2>
-<div id="results" class="hidden"></div>
-</div>
-
 <div class="panel">
 <h2>Границы зон</h2>
 <p class="sub" id="customZonesNote" style="margin-bottom:12px;">Используются стандартные административные границы.</p>
@@ -245,8 +229,6 @@ footer a { color: var(--text-dim); }
 Зоны определяются по административным границам, упрощённым для расчёта.
 </footer>
 </div>
-
-<button type="button" class="primary floating-btn hidden" id="priceBtn">Рассчитать цену</button>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
