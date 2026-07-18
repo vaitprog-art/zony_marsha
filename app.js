@@ -95,10 +95,15 @@ function sleep0() {
 /* ==== Разбивка построенного маршрута по зонам ====
    coords — точки геометрии маршрута от OSRM, формат GeoJSON: [lon, lat].
    Считаем частями (CHUNK точек за раз) с паузой между частями — на слабых
-   устройствах это не даёт браузеру «зависнуть» на весь расчёт целиком. */
+   устройствах это не даёт браузеру «зависнуть» на весь расчёт целиком.
+   totalKm — официальная длина маршрута от OSRM: сумма прямых между точками
+   geometry всегда чуть короче реального пути (даже full geometry немного
+   срезает микро-изгибы дороги), поэтому результат пропорционально
+   подгоняется под totalKm — это даёт точный общий километраж и при этом
+   сохраняет реалистичное распределение по зонам. */
 const ZONE_CALC_CHUNK = 300;
 
-async function computeZoneDistances(coords) {
+async function computeZoneDistances(coords, totalKm) {
   const totals = { crimea: 0, new_territories: 0, russia: 0, other: 0 };
   for (let i = 0; i < coords.length - 1; i++) {
     const [lon1, lat1] = coords[i];
@@ -110,6 +115,13 @@ async function computeZoneDistances(coords) {
       totals[classifyPoint(midLon, midLat)] += segKm;
     }
     if (i % ZONE_CALC_CHUNK === 0) await sleep0();
+  }
+  if (typeof totalKm === 'number' && totalKm > 0) {
+    const rawSum = totals.crimea + totals.new_territories + totals.russia + totals.other;
+    if (rawSum > 0) {
+      const scale = totalKm / rawSum;
+      for (const k of Object.keys(totals)) totals[k] *= scale;
+    }
   }
   return totals;
 }
@@ -129,6 +141,7 @@ const els = {
 
 let lastTotals = null;
 let lastRouteCoords = null; // [[lon,lat], ...] геометрия маршрута от OSRM
+let lastRouteTotalKm = null; // официальная длина маршрута от OSRM
 
 function currentTariffs() {
   return {
@@ -186,7 +199,7 @@ function renderResults(totals) {
 async function runAutoCalculate() {
   if (!lastRouteCoords) return;
   setStatus('Считаем…', 'loading');
-  const totals = await computeZoneDistances(lastRouteCoords);
+  const totals = await computeZoneDistances(lastRouteCoords, lastRouteTotalKm);
   setStatus('', null);
   renderResults(totals);
   els.results.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -236,18 +249,25 @@ async function geocodeAddress(address) {
 }
 
 // Запрашивает у OSRM геометрию маршрута по дорогам между точками.
-// points — массив [lat, lon]. Возвращает координаты в формате GeoJSON [lon, lat].
+// points — массив [lat, lon]. Возвращает { coords, totalKm }: coords — точки
+// геометрии в формате GeoJSON [lon, lat], totalKm — официальная длина
+// маршрута от OSRM (поле distance), которая не зависит от детализации
+// geometry и всегда точна.
 async function fetchRouteGeometry(points) {
   const coords = points.map((p) => `${p[1]},${p[0]}`).join(';');
-  // overview=simplified — geometry заметно компактнее full (по некоторым
-  // маршрутам в разы меньше точек), для расчёта км по зонам этого достаточно,
-  // а нагрузка на слабых устройствах ощутимо ниже.
-  const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=simplified&geometries=geojson`;
+  // overview=full — детальная геометрия. Раньше здесь стоял simplified ради
+  // скорости, но упрощение «спрямляет» повороты и серпантины, из-за чего
+  // при суммировании по геометрии итоговый км занижался на десятки-сотни км
+  // на извилистых маршрутах. Просадку по производительности на слабых
+  // устройствах теперь компенсируют оптимизации classifyPoint (bbox-отсев,
+  // упрощённые полигоны зон) и чанкинг расчёта.
+  const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error('OSRM недоступен');
   const data = await resp.json();
   if (!data.routes || !data.routes.length) throw new Error('Маршрут не найден');
-  return data.routes[0].geometry.coordinates;
+  const route = data.routes[0];
+  return { coords: route.geometry.coordinates, totalKm: route.distance / 1000 };
 }
 
 function setMarker(slot, coords) {
@@ -331,6 +351,7 @@ function addViaInput() {
 
 function rebuildRoute() {
   lastRouteCoords = null;
+  lastRouteTotalKm = null;
   els.results.classList.add('hidden');
 
   const points = [fromPoint, ...viaPoints, toPoint].filter(Boolean);
@@ -342,8 +363,9 @@ function rebuildRoute() {
 
   setStatus('Строим маршрут…', 'loading');
   fetchRouteGeometry(points)
-    .then((coords) => {
+    .then(({ coords, totalKm }) => {
       lastRouteCoords = coords; // [[lon,lat], ...]
+      lastRouteTotalKm = totalKm;
       const latLngs = coords.map(([lon, lat]) => [lat, lon]);
       routeLayer = L.polyline(latLngs, { color: '#d97757', weight: 4, opacity: 0.85 }).addTo(map);
       map.fitBounds(routeLayer.getBounds(), { padding: [30, 30] });
